@@ -773,6 +773,9 @@ static std::string genScatterGatherCvtFunc(const std::string& dtypeSrc, const st
 static MetalShaderLibrary scatterLib(SCATTER_OPS_TEMPLATE, 3);
 static MetalShaderLibrary gatherLib(GATHER_OPS_TEMPLATE, 3);
 
+extern "C" {
+  extern char **environ;
+}
 static id<MTLComputePipelineState> getPipelineState(const std::string& kernel,
                                                     const std::string& dtypeSrc,
                                                     const std::string& dtypeDst,
@@ -801,7 +804,16 @@ Tensor gatherViewTensor(const at::Tensor& src, at::Tensor& dst) {
   uint32_t numThreads = output.numel();
 
   MPSStream* mpsStream = getCurrentMPSStream();
+  // is this queue serial?
+  // printf("yo\n");
   dispatch_sync_with_rethrow(mpsStream->queue(), ^() {
+
+      /*for (char **env = environ; *env != nullptr; ++env) {
+          std::cout << *env << std::endl;
+      }
+      exit(0);*/
+    static int zcount = 0;
+    zcount++;
     id<MTLComputeCommandEncoder> computeEncoder = mpsStream->commandEncoder();
     std::string functionName = getGatherScatterFunctionName(output.scalar_type(), output.dim(), /*needsScatter=*/false);
     id<MTLComputePipelineState> gatherPSO = getPipelineState(functionName,
@@ -829,9 +841,13 @@ Tensor gatherViewTensor(const at::Tensor& src, at::Tensor& dst) {
     [computeEncoder setComputePipelineState:gatherPSO];
     mtl_setBuffer(computeEncoder, src, 0);
     mtl_setBuffer(computeEncoder, dst.has_storage() ? dst : output, 1);
-    [computeEncoder setBytes:&src_sizes[0] length:sizeof(uint32_t) * kernel_size atIndex:2];
-    [computeEncoder setBytes:&src_strides[0] length:sizeof(uint32_t) * kernel_size atIndex:3];
+    int amount = kernel_size == 0 ? 1 : kernel_size;
+    // int amount = kernel_size;
+    [computeEncoder setBytes:&src_sizes[0] length:sizeof(uint32_t) * amount atIndex:2];
+    [computeEncoder setBytes:&src_strides[0] length:sizeof(uint32_t) * amount atIndex:3];
     [computeEncoder setBytes:&numThreads length:sizeof(uint32_t) atIndex:4];
+    // printf("count  %d\n", zcount);
+    // printf("kernel count %u\n", kernel_size);
     mtl_dispatch1DJob(computeEncoder, gatherPSO, numThreads);
 
     getMPSProfiler().endProfileKernel(gatherPSO);
